@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const {
   findUserByEmail,
   createUserByEmailAndPassword,
+  findUserById,
 } = require("../services/user.service");
 
 function generateToken(user) {
@@ -98,8 +99,8 @@ async function login(req, res) {
 
 async function profile(req, res) {
   const user = await findUserByEmail(req.user.email);
-  if (!user) {
-    return res.status(404).json({ message: "User not found." });
+  if (!user || user.id !== req.user.userId) {
+    return res.status(403).json({ message: "Unauthorized" });
   }
 
   res.json({
