@@ -1,21 +1,33 @@
-const bcrypt = require("bcrypt");
+const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const {
   findUserByEmail,
   createUserByEmailAndPassword,
-  findUserById,
 } = require("../services/user.service");
 
 function generateToken(user) {
-  return jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
-    expiresIn: "15m",
-  });
+  return jwt.sign(
+    { userId: user.id, email: user.email },
+    process.env.JWT_SECRET,
+    { expiresIn: "15m" }
+  );
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, "sha512").toString("hex");
+  return { salt, hash };
+}
+
+function verifyPassword(password, storedHash, salt) {
+  const hashVerify = crypto.pbkdf2Sync(password, salt, 1000, 64, "sha512").toString("hex");
+  return storedHash === hashVerify;
 }
 
 async function register(req, res) {
   const { name, email, password } = req.body;
   if (!name || !email || !password) {
-    return res.status(400).json({ message: "Email and password are required." });
+    return res.status(400).json({ message: "Name, email, and password are required." });
   }
 
   const existingUser = await findUserByEmail(email);
@@ -23,29 +35,33 @@ async function register(req, res) {
     return res.status(400).json({ message: "Email is already in use." });
   }
 
- try {
-    const user = await createUserByEmailAndPassword({ name, email, password });
-    res.status(201).json({ user });
+  try {
+    const { salt, hash } = hashPassword(password);
+
+    const user = await createUserByEmailAndPassword({
+      name,
+      email,
+      passwordHash: hash,
+      passwordSalt: salt,
+    });
+
+    const token = generateToken(user);
+
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    res.status(201).json({
+      message: "Registration successful",
+      user: { id: user.id, email: user.email },
+      token,
+    });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
-  const token = generateToken(user);
-
-  res.cookie("token", token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-  });
-
-  res.status(201).json({
-    message: "Registration successful",
-    user: {
-      id: user.id,
-      email: user.email,
- },
-    token: token,
-  });
 }
 
 async function login(req, res) {
@@ -59,7 +75,7 @@ async function login(req, res) {
     return res.status(400).json({ message: "Invalid email or password." });
   }
 
-  const isMatch = await bcrypt.compare(password, user.password);
+  const isMatch = verifyPassword(password, user.passwordHash, user.passwordSalt);
   if (!isMatch) {
     return res.status(400).json({ message: "Invalid email or password." });
   }
@@ -75,16 +91,13 @@ async function login(req, res) {
 
   res.status(200).json({
     message: "Login successful",
-user: {
-      id: user.id,
-      email: user.email,
-    },
-    token: token,
+    user: { id: user.id, email: user.email },
+    token,
   });
 }
 
 async function profile(req, res) {
-  const user = await findUserById(req.userId);
+  const user = await findUserByEmail(req.user.email);
   if (!user) {
     return res.status(404).json({ message: "User not found." });
   }
@@ -98,5 +111,5 @@ async function profile(req, res) {
 module.exports = {
   register,
   login,
-  profile,
+  profile,
 };
